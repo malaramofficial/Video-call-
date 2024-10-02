@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en"> 
+ <head> 
+  <meta charset="UTF-8"> 
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"> 
+  <title>Real-Time Video Chat</title> 
+  <style>
+        video {
+            width: 300px;
+            height: 200px;
+        }
+    </style> 
+ <style type="text/css" id="dcoder_stylesheet">/* बेसिक बॉडी सेटिंग्स */
+body {
+    font-family: 'Arial', sans-serif;
+    background-color: #f4f7fc;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    color: #333;
+}
+
+/* मुख्य हेडिंग */
+h1 {
+    font-size: 2.5rem;
+    color: #2d77d7;
+    margin-bottom: 20px;
+    text-shadow: 1px 1px 5px rgba(0, 0, 0, 0.1);
+}
+
+/* वीडियो स्टाइल */
+video {
+    width: 45%;
+    height: auto;
+    border-radius: 10px;
+    border: 3px solid #2d77d7;
+    box-shadow: 0px 4px 15px rgba(0, 0, 0, 0.2);
+    margin: 10px;
+}
+
+/* बटन स्टाइलिंग */
+button {
+    padding: 12px 20px;
+    margin: 10px;
+    font-size: 1rem;
+    font-weight: bold;
+    color: white;
+    background-color: #2d77d7;
+    border: none;
+    border-radius: 25px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0px 4px 10px rgba(0, 0, 0, 0.2);
+}
+
+button:hover {
+    background-color: #1e5bb5;
+    box-shadow: 0px 6px 15px rgba(0, 0, 0, 0.3);
+}
+
+button:active {
+    transform: scale(0.95);
+    box-shadow: 0px 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* बटन का लेआउट */
+button#startCall {
+    background-color: #4CAF50;
+}
+
+button#answerCall {
+    background-color: #FF5722;
+}
+
+/* कंटेनर स्टाइल */
+.container {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    margin-top: 20px;
+}
+
+/* मोबाइल अनुकूलता */
+@media (max-width: 768px) {
+    video {
+        width: 80%;
+    }
+
+    button {
+        width: 80%;
+        padding: 15px;
+        margin: 5px;
+    }
+
+    h1 {
+        font-size: 2rem;
+    }
+}</style></head> 
+ <body> 
+  <h1>Real-Time Video Chat</h1> 
+  <video id="localVideo" autoplay playsinline></video> 
+  <video id="remoteVideo" autoplay playsinline></video>
+  <button id="muteButton">Mute</button>
+   <button id="startCall">Start Call</button> <button id="answerCall">Answer Call</button> <!-- Firebase SDK (v8) --> 
+  <script src="https://www.gstatic.com/firebasejs/8.6.8/firebase-app.js"></script> 
+  <script src="https://www.gstatic.com/firebasejs/8.6.8/firebase-database.js"></script> 
+  <script>
+        // Firebase कॉन्फ़िगरेशन
+        const firebaseConfig = {
+            apiKey: "AIzaSyAYQAK-c5-EBGDN2fuBiAWK17HnqSg058E",
+            authDomain: "voting-app-f5d8b.firebaseapp.com",
+            databaseURL: "https://voting-app-f5d8b-default-rtdb.firebaseio.com",
+            projectId: "voting-app-f5d8b",
+            storageBucket: "voting-app-f5d8b.appspot.com",
+            messagingSenderId: "572075489115",
+            appId: "1:572075489115:web:30e506ae04806e8a128c7e"
+        };
+
+        // Firebase प्रारंभ करें
+        firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+
+        let localStream;
+        let remoteStream;
+        let peerConnection;
+        const configuration = {
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        };
+
+        const localVideo = document.getElementById('localVideo');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const startCallButton = document.getElementById('startCall');
+        const answerCallButton = document.getElementById('answerCall');
+
+        // कनेक्शन शुरू करें
+        async function startCall() {
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            localVideo.srcObject = localStream;
+
+            peerConnection = new RTCPeerConnection(configuration);
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    database.ref('call/candidates').push(event.candidate.toJSON());
+                }
+            };
+
+            peerConnection.ontrack = event => {
+                remoteStream = event.streams[0];
+                remoteVideo.srcObject = remoteStream;
+            };
+
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            database.ref('call/offer').set({
+                sdp: offer.sdp,
+                type: offer.type
+            });
+        }
+
+        // कॉल का उत्तर दें
+        async function answerCall() {
+            const offer = (await database.ref('call/offer').once('value')).val();
+            if (offer) {
+                await createAnswer(offer);
+            }
+
+            database.ref('call/candidates').on('child_added', async snapshot => {
+                const candidate = new RTCIceCandidate(snapshot.val());
+                await peerConnection.addIceCandidate(candidate);
+            });
+        }
+
+        // उत्तर बनाने का कार्य
+        async function createAnswer(offer) {
+            peerConnection = new RTCPeerConnection(configuration);
+
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    database.ref('call/answerCandidates').push(event.candidate.toJSON());
+                }
+            };
+
+            peerConnection.ontrack = event => {
+                remoteStream = event.streams[0];
+                remoteVideo.srcObject = remoteStream;
+            };
+
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            localVideo.srcObject = localStream;
+
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+
+            database.ref('call/answer').set({
+                sdp: answer.sdp,
+                type: answer.type
+            });
+
+            database.ref('call/answerCandidates').on('child_added', async snapshot => {
+                const candidate = new RTCIceCandidate(snapshot.val());
+                await peerConnection.addIceCandidate(candidate);
+            });
+        }
+
+        // UI बटन इवेंट्स
+        
+        startCallButton.addEventListener('click', startCall);
+        answerCallButton.addEventListener('click', answerCall);
+
+        // जब कोई उत्तर सेट होता है
+        database.ref('call/answer').on('value', async snapshot => {
+            const answer = snapshot.val();
+            if (answer && peerConnection) {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+            }
+        });
+    </script> 
+ 
+<script type="text/javascript" id="dcoder_script">
+
+
+
+// Start call function
+async function startCall() {
+    try {
+        // यूजर से कैमरा और माइक की अनुमति मांगे
+        localStream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: {
+                echoCancellation: true,  // Enable echo cancellation
+            }
+        });
+
+        localVideo.srcObject = localStream; // Set local video stream
+
+        const peerConnection = new RTCPeerConnection(configuration); // Peer connection initialized here
+        localStream.getTracks().forEach(track => {
+            peerConnection.addTrack(track, localStream);
+        });
+
+        peerConnection.onicecandidate = event => {
+            if (event.candidate) {
+                database.ref('call/candidates').push(event.candidate.toJSON());
+            }
+        };
+
+        peerConnection.ontrack = event => {
+            const remoteStream = event.streams[0];
+            remoteVideo.srcObject = remoteStream;
+        };
+
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        database.ref('call/offer').set({
+            sdp: offer.sdp,
+            type: offer.type
+        });
+
+    } catch (error) {
+        if (error.name === "NotAllowedError") {
+            alert("कृपया कैमरा और माइक्रोफोन की अनुमति दें!");
+        } else {
+            console.error("Error accessing media devices: ", error);
+        }
+    }
+}
+
+// Mute function
+function toggleMute() {
+    isMuted = !isMuted; // Toggle mute status
+    localStream.getAudioTracks().forEach(track => {
+        track.enabled = !isMuted; // Enable/disable the audio track
+    });
+}
+
+// Handle signaling messages from Firebase
+signalingRef.on('child_added', async (data) => {
+    const message = data.val();
+
+    if (message.offer) {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(message.offer));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        signalingRef.push({ answer });
+    } else if (message.answer) {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(message.answer));
+    } else if (message.candidate) {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(message.candidate));
+    }
+});</script></body></html>
